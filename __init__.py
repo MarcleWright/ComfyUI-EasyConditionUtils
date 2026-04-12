@@ -31,6 +31,8 @@ from .nodes import (
     EasyCountReferenceLatents,
     EasyFluxKontextHelper,
     EasyFlux2KleinCondition,
+    EasyFlux2KleinConditionAdvanced,
+    EasyFlux2KleinReferenceWeightPatch,
 )
 
 # ------------------------------------------------------------------
@@ -44,6 +46,8 @@ NODE_CLASS_MAPPINGS = {
     "EasyCountReferenceLatents":      EasyCountReferenceLatents,
     "EasyFluxKontextHelper":          EasyFluxKontextHelper,
     "EasyFlux2KleinCondition":        EasyFlux2KleinCondition,
+    "EasyFlux2KleinConditionAdvanced": EasyFlux2KleinConditionAdvanced,
+    "EasyFlux2KleinReferenceWeightPatch": EasyFlux2KleinReferenceWeightPatch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -53,6 +57,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "EasyCountReferenceLatents":      "Easy Count Reference Latents",
     "EasyFluxKontextHelper":          "Easy Flux Kontext Helper",
     "EasyFlux2KleinCondition":        "Easy Flux2 Klein Condition",
+    "EasyFlux2KleinConditionAdvanced": "Easy Flux2 Klein Condition Advanced",
+    "EasyFlux2KleinReferenceWeightPatch": "Easy Flux2 Klein Reference Weight Patch",
 }
 
 WEB_DIRECTORY = "./web"
