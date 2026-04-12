@@ -2,35 +2,35 @@
 
 ## Goal
 
-`EasyFlux2KleinCondition` is a productized ComfyUI custom node for Flux Kontext / FLUX.2 Klein workflows.
+`EasyFlux2KleinCondition` is a unified ComfyUI custom node for Flux Kontext / FLUX.2 Klein workflows.
 
-Its purpose is to replace the current "4 independent input workflows + 1 shared backend" setup with one unified node entrypoint.
+It replaces the old pattern of multiple separate workflow front-ends with one node that:
 
-The node should:
+- accepts text conditioning, VAE, ratio, megapixels, mask, batch size, and dynamic image inputs
+- decides routing automatically from connected inputs
+- standardizes latent preparation for both empty-latent and masked-latent cases
+- appends all connected images as reference latents
+- exposes the resolved downstream outputs in one place
 
-- accept text conditioning, VAE, mask, ratio, megapixels, batch size, and a dynamic list of image inputs
-- automatically determine how the task should be routed based on actual input state
-- build the shared sampling-stage outputs in a standard format
-- hide the current workflow-level switching logic from end users
+This node does not use a manual `mode` selector.
 
-This node does not expose a manual `mode` selector.
-All behavior is inferred from connected inputs and parameter values.
+## Node Identity
 
-## Node Name
+| Field | Value |
+|------|------|
+| Internal class | `EasyFlux2KleinCondition` |
+| Display name | `Easy Flux2 Klein Condition` |
+| Category | `EasyConditionUtils` |
 
-- Internal class name: `EasyFlux2KleinCondition`
-- Display name: `Easy Flux2 Klein Condition`
-- Category: `EasyConditionUtils`
+## Core Principles
 
-## Design Principles
-
-- `img_01` is the primary image input
-- `img_02+` are additional reference images only
-- `mask` always applies to `img_01`
-- `ratio` controls aspect ratio
-- `megapixels` controls total pixel count
-- no `width` / `height` input is exposed
-- final outputs should always be normalized into one standard downstream contract
+- `img_01` is the only primary image
+- `img_02+` are reference-only images
+- `mask` always belongs to `img_01`
+- fixed ratio always uses standardized buckets
+- `ratio=default` is the only mode that can follow `img_01`
+- `megapixels=default` has special behavior only for `ratio=default`
+- the node outputs the processed `img_01` that actually determined latent sizing
 
 ## Inputs
 
@@ -38,23 +38,23 @@ All behavior is inferred from connected inputs and parameter values.
 
 | Name | Type | Default | Notes |
 |------|------|---------|-------|
-| `conditioning` | `CONDITIONING` | none | Positive conditioning input, usually from text encoding / guidance nodes |
-| `vae` | `VAE` | none | Used for image encoding and mask-aligned latent preparation |
+| `conditioning` | `CONDITIONING` | none | Positive conditioning input |
+| `vae` | `VAE` | none | Used to encode reference images and masked base image |
 | `ratio` | dropdown | `default` | Aspect ratio selector |
-| `megapixels` | `FLOAT` | `1.0` | Controls final latent/image area |
-| `batch_size` | `INT` | `1` | Sampling batch size |
+| `megapixels` | dropdown | `default` | Target MP mode |
+| `batch_size` | `INT` | `1` | Latent batch size |
 
 ### Optional Inputs
 
 | Name | Type | Default | Notes |
 |------|------|---------|-------|
-| `mask` | `MASK` | none | If connected, it always targets `img_01` |
-| `upscale_method` | dropdown | `bilinear` or implementation default | Used when scaling images and masks |
+| `mask` | `MASK` | none | Always interpreted as the mask for `img_01` |
+| `upscale_method` | dropdown | `lanczos` | Used for image and mask resizing |
 | `img_01` | `IMAGE` | none | Primary image input |
 
-### Dynamic Optional Inputs
+### Dynamic Optional Image Inputs
 
-The node supports dynamic image inputs:
+The node supports:
 
 - `img_01`
 - `img_02`
@@ -62,51 +62,17 @@ The node supports dynamic image inputs:
 - `img_04`
 - ...
 
-Rules:
+Behavior:
 
-- the node initially shows `img_01`
-- when one image input is connected, a new next image input should appear automatically
-- `img_01` has special semantic meaning
-- `img_02+` are reference-only images
-
-## Input Semantics
-
-### `img_01`
-
-`img_01` is the only image that can affect latent construction behavior.
-
-It is used for:
-
-- deriving aspect ratio when `ratio=default`
-- generating base latent when `mask` is connected
-- being injected as a reference latent
-
-### `img_02+`
-
-`img_02`, `img_03`, and later inputs are additional reference images only.
-
-They:
-
-- are encoded and appended into reference latent conditioning
-- do not control latent type selection
-- do not control default aspect ratio
-- are never associated with `mask`
-
-### `mask`
-
-`mask` is always interpreted as the mask for `img_01`.
-
-If `mask` is connected:
-
-- latent generation always uses the `SetLatentNoiseMask` route
-- `ratio` no longer determines latent type
-- the mask must be resized to match the scaled image size used for `img_01` VAE encoding
+- the node starts with `img_01`
+- connecting the last visible image input creates the next image input
+- disconnecting image inputs trims extra trailing empty image inputs
+- `img_01` is primary
+- `img_02+` are additional reference images only
 
 ## Ratio Options
 
-The `ratio` parameter defines aspect ratio only, not final absolute size.
-
-Supported values are expected to include:
+The current ratio list is:
 
 - `default`
 - `1:1`
@@ -114,210 +80,237 @@ Supported values are expected to include:
 - `9:16`
 - `4:3`
 - `3:4`
-- other implementation-defined fixed ratios
+- `3:2`
+- `2:3`
+- `4:1`
 
-### `ratio=default`
+## 1MP Bucket Table
 
-`default` means:
+All fixed ratios are based on this standardized `1MP` bucket table.
+All values are divisible by `16`.
+
+| Ratio | Width | Height |
+|------|------:|-------:|
+| `1:1` | 1024 | 1024 |
+| `16:9` | 1344 | 768 |
+| `9:16` | 768 | 1344 |
+| `4:3` | 1152 | 864 |
+| `3:4` | 864 | 1152 |
+| `3:2` | 1248 | 832 |
+| `2:3` | 832 | 1248 |
+| `4:1` | 2048 | 512 |
+
+## Megapixels Options
+
+The current megapixels list is:
+
+- `default`
+- `1.00`
+- `1.50`
+- `2.00`
+- `3.00`
+- `4.00`
+- `6.00`
+- `8.00`
+
+## Megapixels Rules
+
+### Fixed Ratio
+
+If `ratio != default`:
+
+- fixed ratio always wins
+- `img_01` does not change the final output ratio
+- `megapixels=default` is treated as `1.00`
+- all fixed-ratio sizes are derived from the `1MP` bucket table
+
+Computation:
+
+1. select the `1MP` bucket for that ratio
+2. compute `scale = sqrt(target_mp)`
+3. scale width and height by that factor
+4. align width and height to multiples of `16`
+
+### Default Ratio
+
+If `ratio=default`:
 
 - if `img_01` exists, use the aspect ratio of `img_01`
 - if `img_01` does not exist, fall back to `1:1`
 
-## Size Rules
+### `megapixels=default` with `ratio=default`
 
-The node does not expose `width` or `height` as inputs.
+This follows the special rule set below:
 
-Final output size is derived from:
+1. if there is no `img_01`, it behaves as `1.00 MP`
+2. if `img_01` exists and its size is `<= 4.2 MP`, the node uses the original `img_01` width and height directly
+3. if `img_01` exists and its size is `> 4.2 MP`, the node caps to `4.00 MP` while keeping the aspect ratio of `img_01`
 
-- selected aspect ratio
-- `megapixels`
+This behavior applies to both empty-latent and masked-latent routes.
 
-Defaults:
+## Input Semantics
 
-- if `megapixels` is not explicitly set, use `1.0`
-- if `batch_size` is not explicitly set, use `1`
+### `img_01`
 
-Expected behavior:
+`img_01` is used for:
 
-- compute final `width` and `height` from `ratio + megapixels`
-- align dimensions to Flux-compatible divisibility requirements
-- return the resolved `width` and `height` as outputs
+- `ratio=default` aspect-ratio inference
+- base latent creation when `mask` exists
+- reference latent injection
+- processed `img_01` output
 
-## Automatic Routing Rules
+### `img_02+`
 
-The node must infer behavior from input state instead of a manual mode selector.
+`img_02+` are used only for:
 
-### Rule 1: Mask Present
+- reference latent injection
+
+They do not:
+
+- affect final latent route selection
+- affect fixed ratio bucket sizing
+- receive `mask`
+
+### `mask`
 
 If `mask` is connected:
 
-- always use `img_01` as the base image
-- scale `img_01`
-- VAE encode the scaled `img_01`
-- resize `mask` to the same scaled image size
-- create latent through the `SetLatentNoiseMask` route
-- ignore `ratio` when deciding latent type
+- the node always uses the masked-latent route
+- `img_01` must be connected
+- `img_01` is resized to the final latent size
+- the mask is resized to match the same pixel size
+- the latent is built from encoded `img_01` plus `noise_mask`
 
-This is the highest-priority route.
+## Routing Rules
 
-### Rule 2: No Mask, `ratio=default`
+### Rule 1: Mask Route
+
+If `mask` is connected:
+
+- use `img_01` as base image
+- determine final size from the `ratio=default` family of rules
+- resize `img_01` to that final size
+- VAE encode the resized `img_01`
+- resize `mask` to the same size
+- output latent with `noise_mask`
+
+This route has the highest priority.
+
+### Rule 2: Empty Latent with Fixed Ratio
+
+If `mask` is not connected and `ratio != default`:
+
+- ignore `img_01` for final latent sizing
+- use the fixed ratio bucket system
+- use `1.00 MP` if `megapixels=default`
+
+### Rule 3: Empty Latent with Default Ratio
 
 If `mask` is not connected and `ratio=default`:
 
-- if `img_01` exists, create an empty Flux latent using `img_01`'s aspect ratio
-- if `img_01` does not exist, create an empty Flux latent using `1:1`
+- if `img_01` exists, follow `img_01` ratio
+- if `img_01` does not exist, fall back to `1:1`
+- if `megapixels=default`, use the special default-MP rules above
 
-### Rule 3: No Mask, Fixed Ratio Selected
+## Reference Latent Rules
 
-If `mask` is not connected and `ratio` is a concrete value such as `16:9`, `1:1`, `3:4`, etc.:
-
-- create an empty Flux latent using the selected ratio
-- ignore `img_01` aspect ratio for latent sizing
-
-### Rule 4: No Image Inputs
-
-If no image inputs are connected:
-
-- build empty latent from `ratio + megapixels`
-- if `ratio=default`, treat it as `1:1`
-
-## Reference Latent Injection Rules
-
-Every connected image input should be appended into the positive conditioning as a reference latent.
-
-That includes:
+Every connected image input is appended to positive conditioning as a reference latent:
 
 - `img_01`
 - `img_02`
 - `img_03`
 - ...
 
-However:
+Processing order is numeric:
 
-- only `img_01` participates in latent route selection
-- `img_02+` are reference-only
+1. `img_01`
+2. `img_02`
+3. `img_03`
+4. ...
 
-Recommended processing order:
+Reference image sizing rules:
 
-1. collect connected images in numeric order
-2. scale each image as needed
-3. VAE encode each image
-4. append each encoded latent to `conditioning` as a reference latent
+- if `img_01` is being used for the masked route, it is resized to the final latent size
+- otherwise each image is resized by aspect ratio using the resolved reference megapixels policy
 
 ## Outputs
 
-The node should output the following six values:
+The node outputs the following seven values:
 
 | Name | Type | Description |
 |------|------|-------------|
 | `conditioning` | `CONDITIONING` | Positive conditioning with all reference latents appended |
-| `latent` | `LATENT` | Final latent passed to the sampler |
-| `noise_mask` | mask-like tensor output | Noise-mask representation intended for latent/inpaint sampling flow |
-| `mask` | `MASK` | Standard mask output for normal ComfyUI mask-compatible nodes |
-| `width` | `INT` | Final resolved width |
-| `height` | `INT` | Final resolved height |
+| `latent` | `LATENT` | Final latent used for sampling |
+| `noise_mask` | mask-like tensor | Mask representation for latent/inpaint flow |
+| `mask` | `MASK` | Standard ComfyUI mask output |
+| `img_01_processed` | `IMAGE` | The processed version of `img_01` actually used for latent sizing / encoding |
+| `width` | `INT` | Final resolved output width |
+| `height` | `INT` | Final resolved output height |
 
-## Mask Output Semantics
-
-Two mask-related outputs are required because they serve different downstream uses.
+## Output Semantics
 
 ### `noise_mask`
 
-`noise_mask` is intended for latent/inpaint sampling logic.
-
-It should follow the same representation used by `SetLatentNoiseMask`, typically:
+Used for latent / inpaint flow, usually shaped like:
 
 - `[B, 1, H, W]`
 
-This is not assumed to be universally compatible with every ordinary `MASK` input in ComfyUI.
-
 ### `mask`
 
-`mask` is the standard mask-form output for normal mask-processing nodes.
-
-It should remain in standard ComfyUI mask semantics, such as:
+Used for standard ComfyUI mask-compatible nodes, usually shaped like:
 
 - `[H, W]`
 - or `[B, H, W]`
 
-depending on implementation conventions
+### `img_01_processed`
 
-### Behavior Without Mask Input
+This is not recomputed separately.
+It should be the exact internal `img_01` tensor that was already resized and used for latent preparation.
 
-If no mask is connected:
+That means:
 
-- `noise_mask` should be empty / `None` / absent-equivalent according to implementation needs
-- `mask` should be empty / `None` / absent-equivalent according to implementation needs
+- no second resize pass
+- no second crop pass
+- no duplicate image transformation logic
 
 ## Latent Construction Summary
 
-There are only three latent construction outcomes in this design.
+There are two actual latent families now:
 
-### A. Empty latent using `img_01` aspect ratio
-
-Used when:
-
-- no `mask`
-- `ratio=default`
-- `img_01` exists
-
-### B. Empty latent using selected ratio
+### A. Empty Latent
 
 Used when:
 
 - no `mask`
-- `ratio` is a specific non-default value
 
-Also used when:
+Final size comes from either:
 
-- no images are connected
-- `ratio=default`, which falls back to `1:1`
+- fixed ratio bucket rules
+- or `ratio=default` rules
 
-### C. Latent with noise mask from `img_01`
+### B. Masked Latent
 
 Used when:
 
-- `mask` is connected
+- `mask` exists
 
-This route always has priority over ratio-based empty latent logic.
+Final size always follows the `ratio=default` family of rules and is built from:
 
-## Priority Rules
+- resized `img_01`
+- encoded latent from `img_01`
+- resized `mask`
 
-Priority should be evaluated in this order:
+## Root-Cause Design Intent
 
-1. if `mask` exists, use `img_01 + resized mask -> SetLatentNoiseMask`
-2. else if `ratio=default`, prefer `img_01` aspect ratio if available
-3. else use selected fixed ratio
-4. if no `img_01` exists and `ratio=default`, fall back to `1:1`
+The node should not be implemented by patching separate mode branches independently.
 
-## Suggested Internal Processing Flow
+Instead, it should follow one main sequence:
 
-1. read all connected `img_nn` inputs in order
-2. identify whether `mask` exists
-3. determine effective aspect ratio
-4. compute final `width` and `height` from `ratio + megapixels`
-5. encode all connected images as reference latents
-6. append them into positive conditioning
-7. construct final latent according to routing rules
-8. build `noise_mask` and `mask` outputs if mask route is active
-9. return standardized outputs
+1. resolve routing
+2. resolve final sizing policy
+3. resize images from that policy
+4. encode reference latents
+5. build either empty latent or masked latent
+6. return standardized outputs
 
-## Non-Goals
-
-The node is not intended to:
-
-- expose a manual task mode selector
-- expose direct `width` / `height` inputs
-- let `img_02+` affect base latent selection
-- allow `mask` to target any image other than `img_01`
-
-## Purpose Relative to Existing Workflow
-
-This node is intended to replace the current workflow pattern where four separate front-end paths are manually built for:
-
-- plain image edit
-- masked image edit
-- reference-image-driven generation
-- txt2img
-
-Instead, users should interact with one unified node and let it infer the correct behavior from connected inputs and parameters.
+This keeps all downstream behavior aligned with one source of truth for sizing and routing.
