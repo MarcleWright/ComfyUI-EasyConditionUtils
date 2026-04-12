@@ -29,6 +29,8 @@ from .nodes import (
     EasyReferenceLatentFromLatent,
     EasyClearReferenceLatents,
     EasyCountReferenceLatents,
+    EasyFluxKontextHelper,
+    EasyFlux2KleinCondition,
 )
 
 # ------------------------------------------------------------------
@@ -40,6 +42,8 @@ NODE_CLASS_MAPPINGS = {
     "EasyReferenceLatentFromLatent":  EasyReferenceLatentFromLatent,
     "EasyClearReferenceLatents":      EasyClearReferenceLatents,
     "EasyCountReferenceLatents":      EasyCountReferenceLatents,
+    "EasyFluxKontextHelper":          EasyFluxKontextHelper,
+    "EasyFlux2KleinCondition":        EasyFlux2KleinCondition,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -47,6 +51,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "EasyReferenceLatentFromLatent":  "Easy Reference Latent (from Latent)",
     "EasyClearReferenceLatents":      "Easy Clear Reference Latents",
     "EasyCountReferenceLatents":      "Easy Count Reference Latents",
+    "EasyFluxKontextHelper":          "Easy Flux Kontext Helper",
+    "EasyFlux2KleinCondition":        "Easy Flux2 Klein Condition",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
