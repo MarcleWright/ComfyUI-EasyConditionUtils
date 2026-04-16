@@ -1,377 +1,264 @@
-# EasyFlux2KleinCondition Advanced 与 Reference Weight Patch
+# EasyFlux2KleinConditionAdvanced 与 EasyFlux2KleinReferenceWeightControl
 
-## 目标
+## 产品定义
 
-本文档记录两个新增节点的设计目标、当前实现方案、核心原理，以及它们在 `FLUX.2 Klein` 工作流中的职责边界。
+这两个节点应被定义成一套“最小增量”的 reference weight 控制方案，而不是两套并行的 conditioning 系统。
 
-这两个节点分别是：
+`EasyFlux2KleinConditionAdvanced` 的产品定位是：
 
-- `EasyFlux2KleinConditionAdvanced`
-- `EasyFlux2KleinReferenceWeightPatch`
+- 在 `EasyFlux2KleinCondition` 完全相同行为的基础上，额外输出一份可供 reference weight 控制节点使用的 span 协议
+- 增加与动态 image 输入一一对应的 per-reference weight 输入
+- 它不改变尺寸决策
+- 它不改变 latent 路由
+- 它不修改模型 attention
+- 它只负责在 reference latent 构建完成时，把每张 reference 对应的 token 元数据整理出来
 
-设计出发点是：
+它存在的目的，是在不破坏基础节点稳定性的前提下，为 reference 权重控制提供标准化输入。
 
-- 保留 `EasyFlux2KleinCondition` 现有的尺寸决策和 latent 路由能力
-- 在不破坏原节点职责的前提下，为多参考图权重控制准备元数据
-- 将“生成 reference 元数据”和“执行 attention 权重调节”拆成两个独立节点
+这份协议确认后，应直接作为当前产品定义固定下来，并在后续合并回 `EasyFlux2KleinCondition` 本体时沿用。
 
-## 节点分工
+`EasyFlux2KleinReferenceWeightControl` 的产品定位是：
+
+- 消费 `EasyFlux2KleinConditionAdvanced` 输出的 span 协议
+- 在模型 attention 内对每张 reference 对应的 `K/V` 区段施加独立权重控制
+- 它不负责 reference latent 生成
+- 它不负责尺寸、mask、empty latent 或 masked latent 决策
+- 它也不负责重新定义 `img_01` / `img_02+` 的语义
+
+它的唯一职责，是把“reference span 协议”转化为运行时的 per-reference `K/V weight control`。
+
+## 一句话定义
 
 ### `EasyFlux2KleinConditionAdvanced`
 
-这个节点的职责是：
+`EasyFlux2KleinCondition` 的稳定增量版，只增加 per-reference weight 输入，并额外输出 `reference_control`。
 
-- 继承原始 `EasyFlux2KleinCondition` 的 routing 行为
-- 继续输出标准的 `conditioning / latent / noise_mask / mask / img_01_processed / width / height`
-- 接受可选的 `reference_weights` 字符串输入
-- 为每一张参考图记录权重与 token 元数据
-- 将这些元数据写入 `conditioning["reference_control"]`
+### `EasyFlux2KleinReferenceWeightControl`
 
-它本身不直接修改模型 attention。
+基于该协议，在 attention 的 `K/V` 层面对不同 reference 执行独立权重控制。
 
-### `EasyFlux2KleinReferenceWeightPatch`
+## 为什么这样定义
 
-这个节点的职责是：
+原因很直接：
 
-- 从 `conditioning` 中读取 `reference_control`
-- clone 一份 `MODEL`
-- 对模型挂接 `attn2 patch`
-- 在 cross-attention 路径中，按 reference span 对上下文区段做缩放
+- `EasyFlux2KleinCondition` 本身已经承担了尺寸决策、mask 路由、empty latent / masked latent 构造，以及 reference latent 追加逻辑
+- 这些基础行为已经相对稳定，不应为了实验性的 reference weight 方案而被改写
+- 因此 `Advanced` 最合理的定位不是“另一种 conditioning 节点”，而是“基础节点的协议增强版”
 
-它不重新生成 reference latents，也不负责尺寸决策。
+这意味着：
 
-## 为什么要拆成两个节点
+- `Advanced` 不应发展成一套长期并行的替代逻辑
+- `Advanced` 的存在价值是以最小增量方式承载 reference span 协议
+- 后续应合并回 `EasyFlux2KleinCondition`
 
-原因有三个：
+## EasyFlux2KleinConditionAdvanced 的定义
 
-- `conditioning` 准备阶段天然适合保存 reference 顺序、token 数、局部 span 等元数据
-- attention patch 阶段天然适合消费这些元数据并对运行时张量生效
-- 这样可以把 WIP 的 patch 逻辑与稳定的 latent/route 逻辑解耦
+### 产品目标
 
-拆分之后的好处是：
+`EasyFlux2KleinConditionAdvanced` 应满足以下定义：
 
-- 原来的 `EasyFlux2KleinCondition` 可以继续保持稳定
-- `Advanced` 节点可以先稳定输出 metadata
-- `Patch` 节点可以单独迭代，不影响前面的 conditioning 逻辑
+- 输入与 `EasyFlux2KleinCondition` 保持一致
+- 基础语义与 `EasyFlux2KleinCondition` 保持一致
+- 基础 routing 行为与 `EasyFlux2KleinCondition` 保持一致
+- 标准输出与 `EasyFlux2KleinCondition` 保持一致
+- 额外增加与动态 image 输入一一对应的 per-reference weight 输入
+- 仅额外增加一份 `reference_control` 输出
 
-## 背后的原理
+### 必须保持一致的基础行为
 
-## 1. Reference latent 不是普通的 img2img 起始 latent
+`Advanced` 不应重新定义以下内容：
 
-在这套工作流里，参考图首先会被编码成 latent，再作为 reference conditioning 提供给模型。
+- `img_01` 为主图
+- `img_02+` 为 reference-only 图
+- `mask` 始终属于 `img_01`
+- 相同的 ratio / megapixels 决策规则
+- 相同的 empty latent / masked latent 路由规则
+- 相同的 reference latent 追加顺序
+- 相同的 `img_01_processed / width / height` 语义
 
-它更接近“视觉上下文”而不是“从原图出发的采样起点”。
+换句话说：
 
-这也是为什么多参考图权重问题，最合理的落点通常不是“缩图”或“改基础 latent”，而是：
+`Advanced` 的前置行为应与 `EasyFlux2KleinCondition` 完全等价。
 
-- 要先知道每张 reference 对应哪一段 token
-- 再在 attention 层面对对应 span 做单独控制
+### 新增能力
 
-## 2. Token span 是单独调权重的前提
+`Advanced` 新增两项能力：
 
-如果一张参考图进入模型后会对应一段连续 token，那么单独调整它的影响力，本质上就变成：
+- 为每张动态 reference image 提供一个对应的 weight 输入
+- 在 reference latent 构建过程中，输出一份供 reference weight 控制使用的 `reference_control`
 
-- 先确定这张图对应的 token 数
-- 再确定这段 token 在 reference 区中的起止位置
+这份协议需要描述：
 
-只有知道这一点，才可能做到：
+- reference 的顺序
+- reference 的名称
+- 每张 reference 对应的 token 数
+- 每张 reference 在 reference 区内部的 local token span
+- 每张 reference 的基础权重
 
-- 只调 `img_02`
-- 不误伤 `img_01`
-- 不误伤 target image tokens
-- 不误伤 text tokens
+### 协议边界
 
-## 3. 为什么现在先记录 local span
+`Advanced` 只负责输出 reference 区内部的 local span 协议，不负责输出 transformer 总序列中的 absolute span。
 
-当前 `Advanced` 节点记录的是 reference 区内部的局部区间，而不是整条 attention 序列里的绝对区间。
+同时，`Advanced` 中新增的 weight 输入只用于定义每张 reference 的基础权重，并写入 `reference_control`。
 
-例如：
+因此 `Advanced` 不应承担以下职责：
 
-```text
-img_01 -> local span [0, n1)
-img_02 -> local span [n1, n1+n2)
-img_03 -> local span [n1+n2, n1+n2+n3)
-```
+- 不推测 text token 长度
+- 不推测 target image token 长度
+- 不推测 transformer 总序列 absolute span
+- 不修改模型
+- 不执行 patch
 
-这样做的原因是：
+## EasyFlux2KleinReferenceWeightControl 的定义
 
-- 在 conditioning 阶段，可以可靠地知道每张 reference 自己占多少 token
-- 但不一定能在这个阶段准确知道 text tokens 与 target image tokens 在总序列中的真实偏移
+### 产品目标
 
-因此当前设计把问题分成两步：
+`EasyFlux2KleinReferenceWeightControl` 应满足以下定义：
 
-1. `Advanced` 记录 local span
-2. `Patch` 在运行时根据实际 attention 序列去解释这些 span
+- 输入一份来自 `Advanced` 的 reference span 协议
+- 输入与当前采样链保持一致的 `conditioning`
+- 输入一个 `MODEL`
+- 在运行时通过 attention patch 将 local reference spans 映射为实际的 reference `K/V` 区段
+- 对每张 reference 对应的 `K/V` 执行独立权重缩放
+- 输出 patched model
 
-## 当前实现方案
+### 它不负责什么
 
-## `EasyFlux2KleinConditionAdvanced`
+`ReferenceWeightControl` 不应承担以下职责：
 
-### 输入
+- 不生成 reference latents
+- 不决定图像尺寸
+- 不处理 mask routing
+- 不处理 empty latent / masked latent 构造
+- 不改变 reference 图的编码逻辑
+- 不再接收 manual per-reference weight 输入
 
-它保留了原节点的主要输入，并新增：
+它的职责边界应保持为：
 
-- `reference_weights`
-- `default_reference_weight`
+- 消费协议
+- 解释 span
+- 改写 `K/V`
 
-其中 `reference_weights` 使用字符串格式：
+### 核心行为
 
-```text
-img_01=1.0,img_02=0.8,img_03=1.2
-```
-
-未显式指定的图片会使用 `default_reference_weight`。
-
-### 每张参考图记录了什么
-
-当前实现里，每张图都会记录：
-
-- `name`
-- `weight`
-- `latent_h`
-- `latent_w`
-- `token_count`
-
-这里的 `token_count` 采用当前工程里更稳定的近似方式：
-
-```text
-token_count = latent_h * latent_w
-```
-
-这与当前节点尺寸逻辑保持一致，因为本项目里 FLUX.2 latent 路径以 `/16` 的 latent 空间尺寸来理解。
-
-### 输出到 conditioning 的 metadata
-
-当前写入的是：
+`ReferenceWeightControl` 的核心行为应以如下语义为准：
 
 ```python
-conditioning["reference_control"] = {
-    "mode": "local_reference_spans",
-    "names": [...],
-    "weights": [...],
-    "token_counts": [...],
-    "latent_shapes": [...],
-    "local_token_ranges": [...],
-    "total_reference_tokens": ...,
+k[:, :, start:end, :] *= weight_i
+v[:, :, start:end, :] *= weight_i
+```
+
+其中：
+
+- `start:end` 指向单张 reference 对应的目标 span
+- `weight_i` 是该 reference 的最终权重系数
+
+当前实现约定为：
+
+- 使用 `attn1_patch`
+- 在 patch 回调中直接处理运行时的 `q / k / v`
+- 依赖运行时提供的 `reference_image_num_tokens`
+- 再结合 `reference_control.reference_token_counts` 与 `reference_token_ranges` 确定每张 reference 对应的 `K/V` 区段
+
+因此，当前 attention patch 的关键点不是去猜测一个固定的 tail-span，而是：
+
+- 先从运行时拿到 reference token 数量
+- 再把 `Advanced` 记录的 local span 映射到实际的 reference token 区段
+- 最后直接对该区段的 `k / v` 做缩放
+
+如果运行时不能可靠提供 reference token 信息，就不能宣称节点实现了严格的 per-reference weight control。
+
+## 两节点之间的职责边界
+
+这两个节点之间的职责边界应固定为：
+
+### `Advanced` 负责
+
+- 生成 reference latents
+- 保持基础 conditioning / latent 路由行为
+- 记录 reference token metadata
+- 输出 reference span 协议
+
+### `ReferenceWeightControl` 负责
+
+- 读取 span 协议
+- 读取与当前采样链一致的 `conditioning`
+- 在 `attn1_patch` 中读取运行时 reference token 信息
+- 在运行时解释 local spans
+- 映射到实际 attention 中的 reference `K/V` 区段
+- 对目标 `K/V` 区间做权重改写
+
+这种设计的结果是：
+
+- `Advanced` 始终只是 `EasyFlux2KleinCondition` 的稳定增量版
+- `ReferenceWeightControl` 始终只是一个独立的 model behavior modifier
+- `Advanced` 可以自然合并回基础节点
+
+## 协议定义建议
+
+建议把 `Advanced` 的新增输出统一定义为 `reference_control`。
+
+推荐语义如下：
+
+```python
+{
+    "reference_names": ["img_01", "img_02", "img_03"],
+    "reference_base_weights": [1.0, 0.8, 1.2],
+    "reference_token_counts": [n1, n2, n3],
+    "reference_token_ranges": [
+        (0, n1),
+        (n1, n1 + n2),
+        (n1 + n2, n1 + n2 + n3),
+    ],
+    "total_reference_tokens": n1 + n2 + n3,
 }
 ```
 
-另外还写入：
+这里的字段含义应明确为：
 
-```python
-conditioning["reference_control_version"] = 1
-```
+- `reference_names`：reference 输入顺序
+- `reference_base_weights`：每张 reference 的基础权重
+- `reference_token_counts`：每张 reference 对应的 token 数
+- `reference_token_ranges`：每张 reference 在 reference 区内部的 local spans
+- `total_reference_tokens`：所有 reference token 总数
 
-这相当于给后续 patch 留了一层协议版本。
+这里的 `reference_token_ranges` 必须明确解释为：
 
-### 为什么还输出 `reference_summary`
+- 它是 reference 区内部的 local spans
+- 它不是 transformer 总序列中的 absolute spans
 
-为了便于在 workflow 中快速确认 metadata 是否符合预期，节点额外输出一个字符串摘要。
+## 权重来源建议
 
-这个摘要可以帮助快速观察：
+`ReferenceWeightControl` 使用的每张 reference 权重，直接来自 `Advanced` 输出的 `reference_control.reference_base_weights`。
 
-- 参考图顺序
-- 每张图的权重
-- 每张图估算出的 token 数
-- 每张图的 local span
+也就是说：
 
-## `EasyFlux2KleinReferenceWeightPatch`
+- 每张 reference 的基础权重在 `Advanced` 中定义
+- 这些权重随 `reference_control` 一起传递给 `ReferenceWeightControl`
+- `ReferenceWeightControl` 不再单独接收 manual per-reference weight 输入
 
-### 输入
+## 推荐的最小实现原则
 
-这个节点输入：
+如果后续要正式实现，应坚持以下最小实现原则：
 
-- `model`
-- `conditioning`
-
-以及两个附加控制项：
-
-- `global_weight_scale`
-- `include_img_01`
-
-`global_weight_scale` 会乘到每张 reference 的独立权重上。
-
-`include_img_01 = false` 时，即使 `reference_control` 里给了 `img_01` 权重，也会把它按 `1.0` 对待。
-
-### 当前 patch 的实现方式
-
-当前版本使用的是：
-
-- `model.clone()`
-- `set_model_attn2_patch(...)`
-
-也就是说，它当前挂的是 cross-attention 路径的 patch。
-
-回调会拿到：
-
-- `q`
-- `context`
-- `value`
-- `extra_options`
-
-然后对 `context / value` 中属于 reference 的 span 做缩放。
-
-### 当前的关键假设
-
-当前 patch 使用了一个非常明确的工程假设：
-
-- reference tokens 位于 `context` 序列尾部
-
-于是它会用：
-
-```text
-reference_start = sequence_length - total_reference_tokens
-```
-
-然后把 `local_token_ranges` 映射到 tail 区间中去。
-
-这就是当前版本里 summary 写的 `tail-span assumption`。
-
-### 为什么这是 WIP 但仍然值得先落地
-
-因为这个版本虽然还不是最终形态，但已经满足两个重要目的：
-
-- `Advanced` 产出的 metadata 已经真的被消费起来了
-- 可以验证“按 reference 分别调权重”这条工程链路是不是通的
-
-它适合作为：
-
-- 原型验证
-- 工作流试跑
-- 后续升级到更精确 patch 的中间台阶
-
-## 当前限制
-
-当前实现有几个重要限制，需要明确记录：
-
-## 1. 还不是严格意义上的投影后 K/V patch
-
-当前逻辑是在 `attn2_patch` 中对 `context / value` 区段进行缩放。
-
-它在工程效果上接近 reference weight 控制，但不是最严格的“投影后 key/value 张量 span 级调节”。
-
-更激进的后续版本可以考虑：
-
-- 使用 replace 类 patch
-- 直接在投影后的 `k / v` 上改写
-
-## 2. 依赖 tail-span 假设
-
-当前 patch 假定 reference tokens 落在 context 序列尾部。
-
-如果某个具体模型实现、某个 ComfyUI 版本，或者某个后续优化节点改变了 token 排列方式，那么：
-
-- 权重可能落不到预期 reference 上
-- 或者只部分生效
-
-## 3. local span 不是绝对 span
-
-当前 metadata 中记录的是 reference 区内的局部 span，不是整个 transformer 输入序列中的绝对 span。
-
-这意味着当前版本对“reference 在总序列中的定位”仍然使用推断，而不是精确回填。
-
-## 4. 没有做 layer-wise 或 block-wise 区分
-
-当前 patch 没有区分：
-
-- 不同 transformer block
-- 不同 attention layer
-- 不同时刻的不同 patch 策略
-
-它是一个全局、统一的 reference weight 缩放方案。
-
-## 推荐工作流
-
-当前建议的接法是：
-
-1. 文本 conditioning 正常生成
-2. 输入 `EasyFlux2KleinConditionAdvanced`
-3. 让它输出 `conditioning + latent`
-4. 把同一个 `conditioning` 接给 `EasyFlux2KleinReferenceWeightPatch`
-5. 用 patch 节点输出的 `model` 去进入后续采样器
-
-概念上可以写成：
-
-```text
-text conditioning
-    -> EasyFlux2KleinConditionAdvanced
-    -> conditioning, latent
-
-model
-conditioning
-    -> EasyFlux2KleinReferenceWeightPatch
-    -> patched model
-
-patched model + latent + conditioning
-    -> sampler
-```
-
-## 为什么不把 patch 直接塞回 Advanced 节点
-
-原因是职责不同：
-
-- `Advanced` 本质上还是 conditioning/latent 准备节点
-- `Patch` 本质上是 model 行为修改节点
-
-把二者拆开更符合 ComfyUI 里的常见使用方式，也更方便调试：
-
-- 你可以只用 `Advanced` 看 metadata
-- 你可以把不同 patch 节点接在同一个 `conditioning` 上做实验
-- 后续如果 patch 方案变动，不需要重写前面的 latent 准备逻辑
-
-## 后续升级方向
-
-后面如果要继续做强，可以沿着这几个方向升级：
-
-## 1. 更精确地确定 reference 在总序列中的绝对 span
-
-理想状态下，patch 能知道：
-
-- text token 区间
-- target token 区间
-- reference token 区间
-
-这样就能从 local span 升级到 absolute span。
-
-## 2. 从 `attn2_patch` 升级到更底层的 replace/hook
-
-如果后续能稳定拿到投影后的 `k / v`，可以把当前的“上下文缩放”升级成更直接的：
-
-```python
-k[..., start:end, :] *= weight
-v[..., start:end, :] *= weight
-```
-
-这会更接近理论上的 per-reference K/V weight control。
-
-## 3. 支持更丰富的权重输入方式
-
-目前 `reference_weights` 还是字符串输入，后续可以考虑：
-
-- 每张图单独 widget
-- 支持更友好的批量编辑格式
-- 支持从别的节点输入权重表
-
-## 4. 引入更多调节维度
-
-例如：
-
-- 只调 `K`
-- 只调 `V`
-- 按 layer 范围调权重
-- 按 reference 类型调不同策略
+1. `Advanced` 与 `EasyFlux2KleinCondition` 的基础行为完全一致
+2. `Advanced` 只新增与动态 image 输入一一对应的 per-reference weight 输入，以及 `reference_control` 输出
+3. `Advanced` 只输出 local spans，不承担 absolute span 推导
+4. `ReferenceWeightControl` 不再接 manual 权重输入，只消费 `reference_control`
+5. `ReferenceWeightControl` 负责运行时 span 解释
+6. `ReferenceWeightControl` 的最终动作是直接改写目标 `K/V`
 
 ## 总结
 
-这两个节点当前形成的是一个两段式方案：
+这套方案不是要建立两条并行的 conditioning 系统，而是要建立一条稳定主线加一条可合并的协议增强线：
 
-1. `EasyFlux2KleinConditionAdvanced` 负责生成 reference latents，同时记录 per-reference weight 与 token span metadata
-2. `EasyFlux2KleinReferenceWeightPatch` 负责读取 metadata，并在 cross-attention 中执行 reference 权重调节
+- `EasyFlux2KleinCondition` 负责稳定的 conditioning / latent 行为
+- `EasyFlux2KleinConditionAdvanced` 负责以最小增量方式提供 reference span 协议
+- `EasyFlux2KleinReferenceWeightControl` 负责消费协议，并执行严格的 per-reference `K/V` 权重控制
 
-它的价值不在于“已经是最终方案”，而在于：
+最合理的终局是：
 
-- 路径清晰
-- 职责分离
-- 可以在 public repo 中公开保留一套可解释、可迭代的工程方案
+- 将 `Advanced` 的协议输出能力合并回 `EasyFlux2KleinCondition`
+- 让 `ReferenceWeightControl` 继续作为独立节点存在
 
-如果后面要继续演进，更合理的方向不是推翻现有结构，而是在现有 metadata 协议基础上，把 patch 的定位精度和执行层级继续往下做深。
+这样既能维持基础节点稳定，也能把 reference weight 控制设计成一套结构清晰、职责明确、可长期维护的方案。

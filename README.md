@@ -63,6 +63,47 @@ What it does:
 
 ## Other Nodes
 
+### Easy Flux2 Klein Condition Advanced
+
+An advanced variant of `Easy Flux2 Klein Condition` that keeps the same
+conditioning / latent routing behavior, while also:
+
+- adding per-reference weight widgets alongside dynamic `img_01`, `img_02`, ...
+- outputting `reference_control` for downstream reference weight control
+
+Its standard outputs remain aligned with the base node, with one extra output:
+
+- `reference_control`
+
+### Easy Flux2 Klein Reference Weight Control
+
+Consumes:
+
+- `model`
+- `conditioning`
+- `reference_control`
+
+and outputs:
+
+- patched `model`
+
+This node applies reference-specific attention weighting from
+`reference_control` and is intended to be connected in parallel with the
+conditioning / latent path, then merged at the sampler.
+
+Typical wiring:
+
+```text
+EasyFlux2KleinConditionAdvanced
+    -> conditioning -----> sampler
+    -> latent -----------> sampler
+    -> reference_control -> EasyFlux2KleinReferenceWeightControl
+
+model -------------------> EasyFlux2KleinReferenceWeightControl
+EasyFlux2KleinReferenceWeightControl
+    -> model -----------> sampler
+```
+
 ### Easy Reference Latent Apply (Batch)
 
 Encodes an image batch and appends each image as a reference latent.
@@ -92,6 +133,7 @@ Then restart ComfyUI.
 ## Docs
 
 - Node spec: [doc/EasyFlux2KleinCondition.md](doc/EasyFlux2KleinCondition.md)
+- Advanced + reference weight control: [doc/EasyFlux2KleinCondition_advanced_reference_weight_ZH.md](doc/EasyFlux2KleinCondition_advanced_reference_weight_ZH.md)
 - Bucket list: [doc/EasyFlux2KleinCondition_bucket_list.md](doc/EasyFlux2KleinCondition_bucket_list.md)
 - Workflow example: [doc/flux2klein_switch_route_v2.json](doc/flux2klein_switch_route_v2.json)
 

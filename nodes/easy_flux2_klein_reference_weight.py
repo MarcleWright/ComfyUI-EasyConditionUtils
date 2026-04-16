@@ -2,142 +2,123 @@ from __future__ import annotations
 
 from typing import Any
 
-
-def _extract_reference_control(conditioning) -> dict | None:
-    for _cond_tensor, cond_dict in conditioning:
-        if not isinstance(cond_dict, dict):
-            continue
-        reference_control = cond_dict.get("reference_control")
-        if isinstance(reference_control, dict):
-            return reference_control
-    return None
+from .easy_flux2_klein_condition_advanced import REFERENCE_CONTROL_TYPE
 
 
-def _scale_reference_tail_tokens(
-    context,
-    value,
-    reference_control: dict,
-    global_weight_scale: float,
-    include_img_01: bool,
-):
-    if context is None:
-        return context, value
-
-    names = list(reference_control.get("names", []))
-    weights = list(reference_control.get("weights", []))
-    local_ranges = list(reference_control.get("local_token_ranges", []))
+def _validate_reference_control(reference_control: dict) -> tuple[list[str], list[float], list[int], list[tuple[int, int]], int]:
+    names = list(reference_control.get("reference_names", []))
+    base_weights = [float(value) for value in reference_control.get("reference_base_weights", [])]
+    token_counts = [int(value) for value in reference_control.get("reference_token_counts", [])]
+    token_ranges = [tuple(item) for item in reference_control.get("reference_token_ranges", [])]
     total_reference_tokens = int(reference_control.get("total_reference_tokens", 0))
 
-    if not names or total_reference_tokens <= 0:
-        return context, value
+    if not names:
+        raise ValueError("reference_control does not contain any reference_names.")
+    if len(names) != len(base_weights) or len(names) != len(token_counts) or len(names) != len(token_ranges):
+        raise ValueError("reference_control field lengths do not match.")
 
-    token_axis = 1
-    sequence_length = int(context.shape[token_axis])
-    if total_reference_tokens > sequence_length:
-        return context, value
+    expected_start = 0
+    for token_count, (start, end) in zip(token_counts, token_ranges):
+        start = int(start)
+        end = int(end)
+        if start != expected_start or end < start or end - start != token_count:
+            raise ValueError("reference_control contains non-contiguous token ranges.")
+        expected_start = end
 
-    reference_start = sequence_length - total_reference_tokens
-    scaled_context = context.clone()
-    scaled_value = value.clone() if value is not None else scaled_context
+    if total_reference_tokens != expected_start:
+        raise ValueError("reference_control total_reference_tokens does not match token ranges.")
 
-    for name, weight, local_range in zip(names, weights, local_ranges):
-        if name == "img_01" and not include_img_01:
+    normalized_ranges = [(int(start), int(end)) for start, end in token_ranges]
+    return names, base_weights, token_counts, normalized_ranges, total_reference_tokens
+
+
+def _apply_reference_weight_patch(
+    q,
+    k,
+    v,
+    reference_control: dict,
+    extra_options: dict[str, Any],
+):
+    ref_token_counts_runtime = extra_options.get("reference_image_num_tokens", [])
+    if not ref_token_counts_runtime:
+        return {}
+
+    names, base_weights, token_counts, _token_ranges, _total_reference_tokens = _validate_reference_control(reference_control)
+    if len(ref_token_counts_runtime) < len(names):
+        return {}
+
+    normalized_runtime_counts = [int(value) for value in ref_token_counts_runtime[: len(names)]]
+    if normalized_runtime_counts != token_counts:
+        return {}
+
+    total_ref = sum(normalized_runtime_counts)
+    if total_ref <= 0:
+        return {}
+
+    scaled_k = k.clone()
+    scaled_v = v.clone()
+
+    token_offset = 0
+    for weight, token_count in zip(base_weights, normalized_runtime_counts):
+        if token_count <= 0 or weight == 1.0:
+            token_offset += token_count
             continue
 
-        local_start, local_end = int(local_range[0]), int(local_range[1])
-        start = max(0, reference_start + local_start)
-        end = min(sequence_length, reference_start + local_end)
-        if end <= start:
-            continue
+        seq_start = -total_ref + token_offset
+        seq_end = seq_start + token_count
+        seq_end_idx = None if seq_end == 0 else seq_end
+        scaled_k[:, :, seq_start:seq_end_idx, :] *= float(weight)
+        scaled_v[:, :, seq_start:seq_end_idx, :] *= float(weight)
+        token_offset += token_count
 
-        final_weight = float(weight) * float(global_weight_scale)
-        if final_weight == 1.0:
-            continue
-
-        scaled_context[:, start:end, :] *= final_weight
-        scaled_value[:, start:end, :] *= final_weight
-
-    return scaled_context, scaled_value
+    return {
+        "q": q,
+        "k": scaled_k,
+        "v": scaled_v,
+    }
 
 
-class EasyFlux2KleinReferenceWeightPatch:
+class EasyFlux2KleinReferenceWeightControl:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "model": ("MODEL", {"forceInput": True}),
                 "conditioning": ("CONDITIONING", {"forceInput": True}),
-            },
-            "optional": {
-                "global_weight_scale": (
-                    "FLOAT",
-                    {
-                        "default": 1.0,
-                        "min": 0.0,
-                        "max": 8.0,
-                        "step": 0.05,
-                        "tooltip": "Global multiplier applied on top of per-reference weights.",
-                    },
-                ),
-                "include_img_01": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "tooltip": "If false, img_01 keeps weight 1.0 even if metadata contains another value.",
-                    },
-                ),
-            },
+                "reference_control": (REFERENCE_CONTROL_TYPE, {"forceInput": True}),
+            }
         }
 
-    RETURN_TYPES = ("MODEL", "CONDITIONING", "STRING")
-    RETURN_NAMES = ("model", "conditioning", "patch_summary")
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
     FUNCTION = "patch"
     CATEGORY = "EasyConditionUtils"
     DESCRIPTION = (
-        "Apply per-reference cross-attention weighting using metadata emitted by "
-        "EasyFlux2KleinConditionAdvanced. Assumes reference tokens are appended "
-        "to the tail of the context sequence."
+        "Apply per-reference weight control from reference_control.\n"
+        "Consumes the local reference span protocol emitted by EasyFlux2KleinConditionAdvanced\n"
+        "and patches the model used by the downstream sampler."
     )
 
     def patch(
         self,
         model,
         conditioning,
-        global_weight_scale: float = 1.0,
-        include_img_01: bool = True,
+        reference_control,
     ):
-        reference_control = _extract_reference_control(conditioning)
-        if reference_control is None:
-            return (model, conditioning, "No reference_control metadata found.")
-
-        names = list(reference_control.get("names", []))
-        if not names:
-            return (model, conditioning, "No reference images recorded in reference_control.")
+        del conditioning
+        _validate_reference_control(reference_control)
 
         patched_model = model.clone()
 
-        def attn2_patch(q, context, value, extra_options: dict[str, Any]):
-            del extra_options
-            return (
-                q,
-                *_scale_reference_tail_tokens(
-                    context=context,
-                    value=value,
-                    reference_control=reference_control,
-                    global_weight_scale=global_weight_scale,
-                    include_img_01=include_img_01,
-                ),
+        def attn1_patch(q, k, v, extra_options: dict[str, Any] | None = None, **kwargs):
+            del kwargs
+            return _apply_reference_weight_patch(
+                q=q,
+                k=k,
+                v=v,
+                reference_control=reference_control,
+                extra_options=extra_options or {},
             )
 
-        patched_model.set_model_attn2_patch(attn2_patch)
-
-        summary_parts = []
-        for name, weight in zip(
-            reference_control.get("names", []),
-            reference_control.get("weights", []),
-        ):
-            effective = 1.0 if (name == "img_01" and not include_img_01) else float(weight) * float(global_weight_scale)
-            summary_parts.append(f"{name}={effective:.3f}")
-
-        summary = "Reference weight patch active (tail-span assumption): " + ", ".join(summary_parts)
-        return (patched_model, conditioning, summary)
+        patched_model.set_model_attn1_patch(attn1_patch)
+        return (patched_model,)

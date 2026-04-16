@@ -2,55 +2,64 @@ from __future__ import annotations
 
 import re
 
-import node_helpers
-
 from .easy_flux2_klein_condition import (
     EasyFlux2KleinCondition,
     _add_reference_latent,
     _ensure_divisible,
-    _parse_megapixels,
+    _make_empty_flux_latent,
     _resize_mask,
     _scale_image_to_size,
-    _make_empty_flux_latent,
-    MEGAPIXEL_OPTIONS,
-    RATIO_OPTIONS,
 )
 
 
-def _parse_reference_weights(weights_text: str) -> dict[str, float]:
-    weights: dict[str, float] = {}
-    if not weights_text:
-        return weights
+REFERENCE_CONTROL_TYPE = "REFERENCE_CONTROL"
+REFERENCE_IMAGE_PATTERN = re.compile(r"img_\d{2}")
+REFERENCE_WEIGHT_PATTERN = re.compile(r"img_\d{2}_weight")
 
-    for raw_part in weights_text.split(","):
-        part = raw_part.strip()
-        if not part:
-            continue
 
-        if "=" not in part:
-            raise ValueError(
-                "reference_weights must use 'img_01=1.0,img_02=0.8' format."
-            )
+class _DynamicImageWeightInputs(dict):
+    """Allow ComfyUI to accept dynamic img_nn and img_nn_weight fields."""
 
-        name, raw_value = part.split("=", 1)
-        name = name.strip()
-        if not re.fullmatch(r"img_\d{2}", name):
-            raise ValueError(f"Unsupported reference weight key: {name}")
+    _image_spec = ("IMAGE", {"forceInput": True})
+    _weight_spec = (
+        "FLOAT",
+        {
+            "default": 1.0,
+            "min": 0.0,
+            "max": 8.0,
+            "step": 0.05,
+            "tooltip": "Per-reference base weight used by EasyFlux2KleinReferenceWeightControl.",
+        },
+    )
 
-        try:
-            weights[name] = float(raw_value.strip())
-        except ValueError as exc:
-            raise ValueError(f"Invalid weight for {name}: {raw_value}") from exc
+    def __contains__(self, key):
+        if super().__contains__(key):
+            return True
+        if not isinstance(key, str):
+            return False
+        return bool(REFERENCE_IMAGE_PATTERN.fullmatch(key) or REFERENCE_WEIGHT_PATTERN.fullmatch(key))
 
-    return weights
+    def __getitem__(self, key):
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        if isinstance(key, str):
+            if REFERENCE_IMAGE_PATTERN.fullmatch(key):
+                return self._image_spec
+            if REFERENCE_WEIGHT_PATTERN.fullmatch(key):
+                return self._weight_spec
+        raise KeyError(key)
+
+    def get(self, key, default=None):
+        if key in self:
+            return self[key]
+        return default
 
 
 def _build_reference_control(reference_entries: list[dict]) -> dict:
-    local_ranges = []
     names = []
-    weights = []
+    base_weights = []
     token_counts = []
-    latent_shapes = []
+    token_ranges = []
 
     offset = 0
     for entry in reference_entries:
@@ -59,83 +68,38 @@ def _build_reference_control(reference_entries: list[dict]) -> dict:
         end = start + token_count
         offset = end
 
-        local_ranges.append((start, end))
         names.append(entry["name"])
-        weights.append(float(entry["weight"]))
+        base_weights.append(float(entry["base_weight"]))
         token_counts.append(token_count)
-        latent_shapes.append((int(entry["latent_h"]), int(entry["latent_w"])))
+        token_ranges.append((start, end))
 
     return {
-        "mode": "local_reference_spans",
-        "names": names,
-        "weights": weights,
-        "token_counts": token_counts,
-        "latent_shapes": latent_shapes,
-        "local_token_ranges": local_ranges,
+        "reference_names": names,
+        "reference_base_weights": base_weights,
+        "reference_token_counts": token_counts,
+        "reference_token_ranges": token_ranges,
         "total_reference_tokens": offset,
     }
 
 
-def _add_reference_control(conditioning: list, reference_control: dict) -> list:
-    return node_helpers.conditioning_set_values(
-        conditioning,
-        {
-            "reference_control": reference_control,
-            "reference_control_version": 1,
-        },
-        append=False,
-    )
-
-
-def _make_reference_summary(reference_control: dict) -> str:
-    if not reference_control["names"]:
-        return "No reference images connected."
-
-    parts = []
-    for name, weight, token_count, token_range in zip(
-        reference_control["names"],
-        reference_control["weights"],
-        reference_control["token_counts"],
-        reference_control["local_token_ranges"],
-    ):
-        parts.append(
-            f"{name}: weight={weight:.3f}, tokens={token_count}, local_span={token_range[0]}:{token_range[1]}"
-        )
-    return " | ".join(parts)
+def _extract_reference_weights(kwargs: dict) -> dict[str, float]:
+    weight_map: dict[str, float] = {}
+    for key, value in kwargs.items():
+        if not isinstance(key, str) or not REFERENCE_WEIGHT_PATTERN.fullmatch(key):
+            continue
+        image_name = key[:-7]
+        weight_map[image_name] = float(value)
+    return weight_map
 
 
 class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
     @classmethod
     def INPUT_TYPES(cls):
         base = super().INPUT_TYPES()
-        required = dict(base["required"])
-        optional = dict(base["optional"])
-
-        required["reference_weights"] = (
-            "STRING",
-            {
-                "default": "",
-                "multiline": False,
-                "tooltip": (
-                    "Optional per-reference weights, e.g. "
-                    "'img_01=1.0,img_02=0.8,img_03=1.2'. "
-                    "This node stores metadata for a later attention patch."
-                ),
-            },
-        )
-        optional["default_reference_weight"] = (
-            "FLOAT",
-            {
-                "default": 1.0,
-                "min": 0.0,
-                "max": 8.0,
-                "step": 0.05,
-                "tooltip": "Fallback weight when an image is not explicitly listed.",
-            },
-        )
+        optional = _DynamicImageWeightInputs(dict(base["optional"]))
 
         return {
-            "required": required,
+            "required": dict(base["required"]),
             "optional": optional,
         }
 
@@ -147,7 +111,7 @@ class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
         "IMAGE",
         "INT",
         "INT",
-        "STRING",
+        REFERENCE_CONTROL_TYPE,
     )
     RETURN_NAMES = (
         "conditioning",
@@ -157,12 +121,12 @@ class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
         "img_01_processed",
         "width",
         "height",
-        "reference_summary",
+        "reference_control",
     )
     DESCRIPTION = (
-        "Advanced Flux2 Klein conditioning helper.\n"
-        "Builds the same routing outputs as EasyFlux2KleinCondition, and also stores\n"
-        "per-reference weight and local token-span metadata for future attention hooks."
+        "Flux2 Klein conditioning helper with per-reference weight capture.\n"
+        "Matches EasyFlux2KleinCondition routing while also emitting a reference_control\n"
+        "protocol for downstream reference weight control."
     )
 
     def process(
@@ -172,9 +136,7 @@ class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
         ratio: str,
         megapixels="default",
         batch_size: int = 1,
-        reference_weights: str = "",
         upscale_method: str = "lanczos",
-        default_reference_weight: float = 1.0,
         mask=None,
         img_01=None,
         **kwargs,
@@ -182,9 +144,9 @@ class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
         if mask is not None and img_01 is None:
             raise ValueError("mask requires img_01 to be connected.")
 
-        _parse_megapixels(megapixels)
-        weight_map = _parse_reference_weights(reference_weights)
         image_inputs = self._collect_images(img_01=img_01, **kwargs)
+        weight_map = _extract_reference_weights(kwargs)
+
         routing = self._resolve_routing(
             ratio=ratio,
             megapixels_value=megapixels,
@@ -220,9 +182,7 @@ class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
             reference_entries.append(
                 {
                     "name": image_name,
-                    "weight": float(weight_map.get(image_name, default_reference_weight)),
-                    "latent_h": latent_h,
-                    "latent_w": latent_w,
+                    "base_weight": float(weight_map.get(image_name, 1.0)),
                     "token_count": latent_h * latent_w,
                 }
             )
@@ -232,7 +192,6 @@ class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
                 primary_latent = encoded_latent
 
         reference_control = _build_reference_control(reference_entries)
-        positive = _add_reference_control(positive, reference_control)
 
         noise_mask = None
         standard_mask = None
@@ -270,7 +229,6 @@ class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
                 device=img_01.device if img_01 is not None else None,
             )
 
-        summary = _make_reference_summary(reference_control)
         return (
             positive,
             latent,
@@ -279,5 +237,22 @@ class EasyFlux2KleinConditionAdvanced(EasyFlux2KleinCondition):
             processed_primary_image,
             output_width,
             output_height,
-            summary,
+            reference_control,
         )
+
+    def _collect_images(self, img_01=None, **kwargs):
+        images = []
+        if img_01 is not None:
+            images.append(("img_01", img_01))
+
+        image_items = [
+            (key, value)
+            for key, value in kwargs.items()
+            if isinstance(key, str) and REFERENCE_IMAGE_PATTERN.fullmatch(key)
+        ]
+        for key, value in sorted(image_items, key=self._sort_image_key):
+            if value is None or key == "img_01":
+                continue
+            images.append((key, value))
+
+        return images
