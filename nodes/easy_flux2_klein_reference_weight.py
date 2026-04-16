@@ -89,8 +89,8 @@ class EasyFlux2KleinReferenceWeightControl:
             }
         }
 
-    RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("model",)
+    RETURN_TYPES = ("MODEL", "CONDITIONING")
+    RETURN_NAMES = ("model", "conditioning")
     FUNCTION = "patch"
     CATEGORY = "EasyConditionUtils"
     DESCRIPTION = (
@@ -121,4 +121,4 @@ class EasyFlux2KleinReferenceWeightControl:
             )
 
         patched_model.set_model_attn1_patch(attn1_patch)
-        return (patched_model,)
+        return (patched_model, conditioning)

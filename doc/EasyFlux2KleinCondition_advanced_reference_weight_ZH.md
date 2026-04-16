@@ -1,4 +1,4 @@
-# EasyFlux2KleinConditionAdvanced 与 EasyFlux2KleinReferenceWeightControl
+﻿# EasyFlux2KleinConditionAdvanced 与 EasyFlux2KleinReferenceWeightControl
 
 ## 产品定义
 
@@ -21,6 +21,7 @@
 
 - 消费 `EasyFlux2KleinConditionAdvanced` 输出的 span 协议
 - 在模型 attention 内对每张 reference 对应的 `K/V` 区段施加独立权重控制
+- 透传与当前采样链绑定的 `conditioning`
 - 它不负责 reference latent 生成
 - 它不负责尺寸、mask、empty latent 或 masked latent 决策
 - 它也不负责重新定义 `img_01` / `img_02+` 的语义
@@ -35,7 +36,7 @@
 
 ### `EasyFlux2KleinReferenceWeightControl`
 
-基于该协议，在 attention 的 `K/V` 层面对不同 reference 执行独立权重控制。
+基于该协议，在 attention 的 `K/V` 层面对不同 reference 执行独立权重控制，并原样透传 `conditioning`。
 
 ## 为什么这样定义
 
@@ -121,6 +122,7 @@
 - 在运行时通过 attention patch 将 local reference spans 映射为实际的 reference `K/V` 区段
 - 对每张 reference 对应的 `K/V` 执行独立权重缩放
 - 输出 patched model
+- 原样输出 `conditioning`
 
 ### 它不负责什么
 
@@ -132,12 +134,14 @@
 - 不处理 empty latent / masked latent 构造
 - 不改变 reference 图的编码逻辑
 - 不再接收 manual per-reference weight 输入
+- 不修改 `conditioning` 内容本身
 
 它的职责边界应保持为：
 
 - 消费协议
 - 解释 span
 - 改写 `K/V`
+- 透传 `conditioning`
 
 ### 核心行为
 
@@ -187,6 +191,7 @@ v[:, :, start:end, :] *= weight_i
 - 在运行时解释 local spans
 - 映射到实际 attention 中的 reference `K/V` 区段
 - 对目标 `K/V` 区间做权重改写
+- 原样输出 `conditioning`，用于保持 workflow 链路完整
 
 这种设计的结果是：
 

@@ -375,6 +375,45 @@ reference weight control 属于后者。
 
 这说明至少从工程效果上看，当前权重控制已经不是“无效开关”，而是会连续影响 reference 信息注入强度。
 
+### LoRA 与 ReferenceWeightControl 的关系
+
+如果工作流中还接入了 LoRA，需要把两者理解成不同层级的叠加，而不是互相替代：
+
+- LoRA 修改的是模型本身的行为分布
+- `ReferenceWeightControl` 修改的是运行时 reference 对应 attention `K / V` 区段的权重
+
+因此更合适的理解是：
+
+- LoRA 决定模型更倾向于“怎么画”
+- reference weight control 决定模型有多强地参考某一张 reference
+
+如果先对模型应用 LoRA，再把这个模型送入 `ReferenceWeightControl`，那么最终 sampler 使用的是：
+
+- 已经带有 LoRA 的模型
+- 再叠加 reference attention patch 后得到的 patched model
+
+这意味着：
+
+- `ReferenceWeightControl` 仍然可能有效
+- 但同一个 weight 数值的“手感”可能会被 LoRA 改变
+
+例如：
+
+- 没有 LoRA 时，也许 `0.9` 才能稳定进入同一人物
+- 有 LoRA 时，可能 `0.8` 就足够
+- 也可能反过来，需要更高 weight 才能压过 LoRA 的风格偏置
+
+因此，在理解实验结果时应区分两类情况：
+
+- 无 LoRA 的基准测试：用于判断 reference weight control 本身是否有效
+- 有 LoRA 的叠加测试：用于判断真实生产工作流中的表现
+
+更稳的工程结论是：
+
+- LoRA 不会从原理上否定 `ReferenceWeightControl`
+- 但它会改变 weight 的响应阈值、影响强度以及最终视觉表现
+- 所以即使同属 `FLUX.2 Klein` 工作流，也应分别记录“无 LoRA”和“有 LoRA”的权重手感
+
 ## 10. Reference token 在序列中的排列方式
 
 ### 一张 reference 图为什么会变成一串 token
