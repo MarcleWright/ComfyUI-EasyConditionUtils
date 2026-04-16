@@ -414,6 +414,53 @@ reference weight control 属于后者。
 - 但它会改变 weight 的响应阈值、影响强度以及最终视觉表现
 - 所以即使同属 `FLUX.2 Klein` 工作流，也应分别记录“无 LoRA”和“有 LoRA”的权重手感
 
+### 纯风格 reference 图的内容泄漏问题
+
+如果 reference 图的目标是“只提供风格，不提供内容”，那么当前这类 `reference latent -> reference tokens -> attention K/V weight control` 的路径，天然会遇到 style / content 难以解耦的问题。
+
+更准确地说：
+
+- 当完整参考图被编码成 latent tokens 后，图中的主体内容、局部结构、颜色分布、线条风格、阴影方式等信息，通常会一起进入 reference token 序列
+- 在当前实现里，`ReferenceWeightControl` 对每张 reference 做的是整段 `K / V` 区域的统一缩放
+- 因此 weight 增大时，通常会同时放大“风格影响”和“参考图内容泄漏”
+
+这会表现为：
+
+- 低 weight 时，风格不明显
+- 中高 weight 时，风格逐渐生效
+- 但随着 weight 继续升高，参考图中的主体内容、角色元素、颜色环境也会一起被带入结果图
+
+这不是简单的 prompt 问题，而更像是当前 reference token 机制的自然结果：
+
+- 你放大的不是“纯风格 token”
+- 而是“同时携带风格与内容信息的整段 reference token”
+
+因此，如果目标是“让人物保持原图背景和主体结构，只借用另一张图的绘画风格”，那么单一的全局 reference weight 往往不够，原因就在于它无法把 style 和 content 分开控制。
+
+从当前项目角度，更稳的结论是：
+
+- 当前节点更适合做 character / appearance / clothing / reference influence control
+- 不适合作为严格意义上的 pure style-only reference control
+
+如果要减轻这类内容泄漏，可以考虑的工程方向包括：
+
+- 不直接使用包含明显主体内容的完整风格图
+- 尽量裁掉主体，只保留纹理、笔触、线条、网点、上色方式等纯风格区域
+- 使用结构控制或区域控制来单独约束目标图主体与背景
+- 后续考虑做更细粒度的 patch-level / region-level / token-type-level 控制，而不是整段 reference token 统一缩放
+
+这类问题在相关研究中已经被明确指出：
+
+- `FLUX.1 Kontext` / Kontext 类方法的基本机制，是把 context image 编码成 latent tokens 并与目标 token 一起进入模型，因此它并不会天然完成 style / content 解耦  
+  - FLUX.1 Kontext paper: <https://arxiv.org/abs/2506.15742>
+  - HTML version: <https://ar5iv.labs.arxiv.org/html/2506.15742v2>
+
+- `InstantStyle` 直接指出，现有基于 adapter 的 style transfer 方法常常需要为每张参考图反复调权重，因此他们专门通过特征空间解耦 style 与 content，并把 style 特征注入更合适的块，以减少内容泄漏  
+  - InstantStyle: <https://arxiv.org/abs/2404.02733>
+
+- `Only-Style` 也明确指出，现有 style-consistent image generation 方法难以有效分离 semantic content 和 stylistic elements，会导致 content leakage，因此它专门做了 leakage localization 与自适应抑制  
+  - Only-Style: <https://arxiv.org/abs/2506.09916>
+
 ## 10. Reference token 在序列中的排列方式
 
 ### 一张 reference 图为什么会变成一串 token
