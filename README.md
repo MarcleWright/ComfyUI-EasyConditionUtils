@@ -63,6 +63,35 @@ What it does:
 
 ## Other Nodes
 
+### Easy LoRA List Loader
+
+Keeps a prepared list of LoRA candidates inside one node and applies exactly
+one selected LoRA to the incoming `MODEL`.
+
+What it does:
+
+- exposes up to 50 LoRA slots
+- uses `count` to control how many slots are visible
+- uses `index` to select exactly one active LoRA
+- applies the selected LoRA to `model`
+- outputs the patched `model` and the selected `lora_name`
+
+### Easy Load Text Batch
+
+Loads one prompt text file from a directory batch and outputs:
+
+- `text`
+- `filename_text`
+
+What it does:
+
+- scans a folder with `path + pattern`
+- supports `single_text`, `incremental_text`, and `random`
+- loops in `incremental_text` mode
+- preserves raw file content, including empty files and line breaks
+- based on the batch-loading structure used by `WASasquatchm` in
+  `WAS Node Suite`, adapted here for text prompt files
+
 ### Easy Flux2 Klein Condition Advanced
 
 An advanced variant of `Easy Flux2 Klein Condition` that keeps the same
@@ -134,6 +163,8 @@ Then restart ComfyUI.
 
 - Node spec: [doc/EasyFlux2KleinCondition.md](doc/EasyFlux2KleinCondition.md)
 - Advanced + reference weight control: [doc/EasyFlux2KleinCondition_advanced_reference_weight_ZH.md](doc/EasyFlux2KleinCondition_advanced_reference_weight_ZH.md)
+- Easy LoRA List Loader: [doc/EasyLoraListLoader.md](doc/EasyLoraListLoader.md)
+- Easy Load Text Batch: [doc/EasyLoadTextBatch.md](doc/EasyLoadTextBatch.md)
 - Bucket list: [doc/EasyFlux2KleinCondition_bucket_list.md](doc/EasyFlux2KleinCondition_bucket_list.md)
 - Workflow example: [doc/flux2klein_switch_route_v2.json](doc/flux2klein_switch_route_v2.json)
 

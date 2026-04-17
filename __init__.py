@@ -33,6 +33,9 @@ from .nodes import (
     EasyFlux2KleinCondition,
     EasyFlux2KleinConditionAdvanced,
     EasyFlux2KleinReferenceWeightControl,
+    EasyLoraListLoader,
+    EasyLoadTextBatch,
+    EasyTextListSelector,
 )
 
 # ------------------------------------------------------------------
@@ -48,6 +51,9 @@ NODE_CLASS_MAPPINGS = {
     "EasyFlux2KleinCondition":        EasyFlux2KleinCondition,
     "EasyFlux2KleinConditionAdvanced": EasyFlux2KleinConditionAdvanced,
     "EasyFlux2KleinReferenceWeightControl": EasyFlux2KleinReferenceWeightControl,
+    "EasyLoraListLoader":             EasyLoraListLoader,
+    "EasyLoadTextBatch":             EasyLoadTextBatch,
+    "EasyTextListSelector":           EasyTextListSelector,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -59,6 +65,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "EasyFlux2KleinCondition":        "Easy Flux2 Klein Condition",
     "EasyFlux2KleinConditionAdvanced": "Easy Flux2 Klein Condition Advanced",
     "EasyFlux2KleinReferenceWeightControl": "Easy Flux2 Klein Reference Weight Control",
+    "EasyLoraListLoader":             "Easy LoRA List Loader",
+    "EasyLoadTextBatch":             "Easy Load Text Batch",
+    "EasyTextListSelector":           "Easy Text List Selector",
 }
 
 WEB_DIRECTORY = "./web"

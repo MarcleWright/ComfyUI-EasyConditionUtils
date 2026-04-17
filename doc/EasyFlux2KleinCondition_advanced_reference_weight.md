@@ -1,5 +1,14 @@
 # EasyFlux2KleinConditionAdvanced and EasyFlux2KleinReferenceWeightControl
 
+## Attribution
+
+The current `EasyFlux2KleinReferenceWeightControl` direction explicitly draws
+from the runtime patching approach explored by `capitan01R` in
+`ComfyUI-Flux2Klein-Enhancer`.
+
+This project adapts that idea into the current reference-weight-control node
+and integrates it with this project's `reference_control` workflow.
+
 ## Product Definition
 
 These two nodes should be treated as a minimal-increment reference weight control design, not as two parallel conditioning systems.
