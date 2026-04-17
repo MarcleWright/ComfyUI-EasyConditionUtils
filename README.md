@@ -89,8 +89,6 @@ What it does:
 - supports `single_text`, `incremental_text`, and `random`
 - loops in `incremental_text` mode
 - preserves raw file content, including empty files and line breaks
-- based on the batch-loading structure used by `WASasquatchm` in
-  `WAS Node Suite`, adapted here for text prompt files
 
 ### Easy Flux2 Klein Condition Advanced
 
@@ -167,6 +165,15 @@ Then restart ComfyUI.
 - Easy Load Text Batch: [doc/EasyLoadTextBatch.md](doc/EasyLoadTextBatch.md)
 - Bucket list: [doc/EasyFlux2KleinCondition_bucket_list.md](doc/EasyFlux2KleinCondition_bucket_list.md)
 - Workflow example: [doc/flux2klein_switch_route_v2.json](doc/flux2klein_switch_route_v2.json)
+
+## Acknowledgements
+
+- `WASasquatchm` / `WAS Node Suite`
+  - `Easy Load Text Batch` is based on the batch-loading structure used by
+    `Load Image Batch`, adapted here from image files to text prompt files.
+- `capitan01R` / `ComfyUI-Flux2Klein-Enhancer`
+  - the current `Easy Flux2 Klein Reference Weight Control` direction draws
+    from the runtime patching approach explored in that project.
 
 ## Notes For External Frontends
 
