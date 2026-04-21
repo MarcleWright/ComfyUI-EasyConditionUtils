@@ -105,7 +105,6 @@ class EasyFlux2KleinReferenceWeightControl:
         conditioning,
         reference_control,
     ):
-        del conditioning
         _validate_reference_control(reference_control)
 
         patched_model = model.clone()
