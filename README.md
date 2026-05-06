@@ -161,6 +161,7 @@ Then restart ComfyUI.
 
 - Node spec: [doc/EasyFlux2KleinCondition.md](doc/EasyFlux2KleinCondition.md)
 - Advanced + reference weight control: [doc/EasyFlux2KleinCondition_advanced_reference_weight_ZH.md](doc/EasyFlux2KleinCondition_advanced_reference_weight_ZH.md)
+- 9B reference weight control diagnostics: [doc/EasyFlux2Klein9BReferenceWeightControl.md](doc/EasyFlux2Klein9BReferenceWeightControl.md)
 - Easy LoRA List Loader: [doc/EasyLoraListLoader.md](doc/EasyLoraListLoader.md)
 - Easy Load Text Batch: [doc/EasyLoadTextBatch.md](doc/EasyLoadTextBatch.md)
 - Bucket list: [doc/EasyFlux2KleinCondition_bucket_list.md](doc/EasyFlux2KleinCondition_bucket_list.md)
